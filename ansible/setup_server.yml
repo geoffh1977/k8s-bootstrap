@@ -1,0 +1,211 @@
+---
+# Ansible Script To Configure Server
+- hosts: all
+  become: true
+  vars:
+    addPackages:
+      - vim
+      - htop
+      - docker-ce
+      - kubelet
+      - kubeadm
+      - kubectl
+      - kubernetes-cni
+    removePackages:
+      - 'cloud*'
+      - 'snap*'
+    kubernetes:
+      pod_network_cidr: 10.244.0.0/16
+      apiserver_cert_extra_sans: 10.0.2.15
+    timeZone: Australia/Melbourne
+
+  strategy: free
+
+  tasks:
+    - name: Set Timezone
+      shell: 'timedatectl set-timezone {{ timeZone }}'
+      args:
+        warn: False
+
+    - name: Disable TimeDate Daemon
+      shell: 'timedatectl set-ntp no'
+      args:
+        warn: False
+
+    - name: Update The APT Cache Directly
+      shell: 'apt-get clean && apt-get update'
+      args:
+        warn: False
+
+    - name: Add SSH Access Key To User
+      authorized_key:
+        user: "{{ ansible_user }}"
+        state: present
+        key: "{{ lookup('file', './files/id_rsa.pub') }}"
+
+    - name: Install Dependencies
+      apt:
+        name: apt-transport-https
+        force: yes
+        force_apt_get: yes
+
+    - name: Add The Google Signing Key
+      apt_key:
+        url: 'https://packages.cloud.google.com/apt/doc/apt-key.gpg'
+        state: present
+
+    - name: Add The Docker Signing Key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add K8s Apt Repository
+      apt_repository:
+        repo: 'deb http://apt.kubernetes.io/ kubernetes-xenial main'
+        state: present
+
+    - name: Add Docker Repository
+      apt_repository:
+        repo: 'deb [arch=amd64] https://download.docker.com/linux/ubuntu xenial stable'
+        state: present
+
+    - name: Update The APT Cache Directly
+      shell: 'apt-get update'
+      args:
+        warn: False
+
+    - name: Remove Packages
+      apt:
+        name: "{{ removePackages }}"
+        state: absent
+        force: yes
+        force_apt_get: yes
+      register: resultRemovePackages
+
+    - name: Perform Package Autoremoval
+      shell: 'apt autoremove -y'
+      args:
+        warn: False
+      when: resultRemovePackages is changed
+
+    - name: Remove Snap Path
+      file:
+        path: /root/snap
+        state: absent
+
+    - name: Perform Package Upgrade
+      shell: 'apt upgrade -y'
+      args:
+        warn: False
+
+    - name: Install Additional Packages
+      apt:
+        name: "{{ addPackages }}"
+        state: present
+        force: yes
+        force_apt_get: yes
+
+    - name: Copy Docker Daemon Config
+      copy:
+        src: ./files/daemon.json
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: 0644
+      register: copyConfig
+
+    - name: Ensure Docker System Directory Present
+      file:
+        path: /etc/systemd/system/docker.service.d
+        state: directory
+      register: makeDir
+
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
+        daemon_reload: yes
+      when: makeDir is changed or copyConfig is changed
+
+    - name: Disable Active Swap
+      shell: 'swapoff -a'
+
+    - name: Disable Swap In Fstab
+      lineinfile:
+        path: /etc/fstab
+        state: absent
+        regexp: "^.*swap"
+
+    - name: Update Networking For Weave Net
+      sysctl:
+        name: net.bridge.bridge-nf-call-iptables
+        value: "1"
+        sysctl_set: yes
+        state: present
+        reload: yes
+
+    ### Kubernetes Setup Steps
+
+      # Used For 2 NIC Virtual Machine - May Be Skipped For Actual Server
+    - name: Update Kubelet File With Node Ip
+      shell: "echo KUBELET_EXTRA_ARGS=--node-ip=$(ip addr show dev enp0s8 | grep 'inet ' | awk '{print $2}' | cut -d/ -f 1) > /etc/default/kubelet"
+      when: ansible_facts.enp0s8 is defined
+
+    - name: Check If Kubernetes Is Already Initialized
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: kubernetes_init_stat
+
+    - name: Initialize Kubernetes Maser
+      command: >
+        kubeadm init
+        --pod-network-cidr={{ kubernetes.pod_network_cidr }}
+        --apiserver-advertise-address={{ serverIp | default(ansible_default_ipv4.address, true) }}
+        --apiserver-cert-extra-sans={{ kubernetes.apiserver_cert_extra_sans}}
+      register: kubeadmin_init
+      failed_when: false
+      when: not kubernetes_init_stat.stat.exists
+
+    - name: Print The Output On The Screen
+      debug:
+        var: kubeadmin_init.stdout
+        verbosity: 2
+      when: not kubernetes_init_stat.stat.exists
+
+    - name: Create Kube Config Path For User
+      file:
+        path: ~/.kube
+        state: directory
+
+    - name: Symlink Config File To Main Config File
+      file:
+        src: /etc/kubernetes/admin.conf
+        dest: ~/.kube/config
+        state: link
+
+    - name: Remove Master Node Taint
+      command: "kubectl taint nodes --all node-role.kubernetes.io/master-"
+      when:
+        - not kubernetes_init_stat.stat.exists and singleNode
+
+    - name: Encode Kubernetes Version For Weave Download
+      shell: "kubectl version | base64 | tr -d '\n'"
+      register: kubeVersion
+      when:
+        - not kubernetes_init_stat.stat.exists
+
+    - name: Apply Weave Networking
+      command: kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version={{ kubeVersion.stdout }}"
+      when:
+        - not kubernetes_init_stat.stat.exists
+
+    - name: Ensure Data Mount Exists (Local Storage)
+      file:
+        path: /mnt/data
+        state: directory
+
+    - name: Download Config File For User
+      fetch:
+        src: /etc/kubernetes/admin.conf
+        dest: /tmp/kubeconfig
+        flat: yes

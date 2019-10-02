@@ -1,0 +1,6 @@
+# Project Configuration File
+
+# SSH Server Settings
+serverIp=10.10.10.1
+serverUsername=user
+serverPassword=password
