@@ -9,7 +9,10 @@ These instructions are intended for building the server and get Kubernetes going
 1. Install Ubuntu Server Edition (currently tested with 19.04)
 2. Update the server credentials and IP in the project.conf file.
 3. Update the ansible/files/id_rsa.pub with a Public RSA key to be added to the server user.
-4. Execute "make install-python". This will remotly install python on the server. (The password will need to be entered when run.)
+4. Execute "make deploy-python". This will remotly install python on the server. (The password will need to be entered when run.)
 5. Execute "make provision". This will execute the setup script with the ansible container.
 6. A file will be created locally: "/tmp/kubeconfig" copy or map this file to KUBECONFIG. This is the Kubernetes config file for the new server.
 7. Execute a kubectl command to test the cluster (single node) is responding.
+
+## Further Configuration
+A Flux option has been added to allow for a GitOps approach to managing a cluster. The flux deployment can be created by updating the Git variables in the project.conf and issuing "deploy-flux" to the running cluster.

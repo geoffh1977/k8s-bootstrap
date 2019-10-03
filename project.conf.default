@@ -4,3 +4,10 @@
 serverIp=10.10.10.1
 serverUsername=user
 serverPassword=password
+
+# Git Options
+gitKeyPath=/path/to/git/deploy/git/key
+gitUrl=Full Git URL
+gitEmail=Git Email Address
+gitUser=Git Username
+gitPath=Path To Sync

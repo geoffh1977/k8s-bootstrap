@@ -1,2 +1,4 @@
 project.conf
 ansible/files/id_rsa.pub
+flux/patch-key.yaml
+flux/patch-deploy.yaml
